@@ -1,0 +1,651 @@
+---
+title: "tadar pval exploration data"
+author: "Lachlan Baer"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    fig_width: 8
+    fig_height: 6
+    fig_align: "center"
+    code_folding: show
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  error = FALSE
+)
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+```
+
+```{r pkgs}
+library(tidyverse)
+library(here)
+library(digest)
+library(edgeR)
+library(limma)
+library(tadar)
+library(extraChIPs)
+```
+
+# Dataset A (zebrafish)
+
+- [GEO](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE217196)
+- [Github repository](https://github.com/baerlachlan/211130_Q96K97del_A603fs)
+
+## Sample structure
+
+- Q96K97del/+ ($n = 8$, *psen1* gene, Alzheimer's disease model)
+- A603fs/+ ($n = 8$, *naglu* gene, MPS IIIB model)
+- WT ($n = 8$)
+
+## Metadata
+
+```{r meta_A}
+meta_A <-read_csv(here("data/metadata/psen1_naglu.csv")) %>%
+  ## We need some sample aliases that follow R naming conventions
+  mutate(
+    alias = case_when(
+      genotype == "WT" ~ paste0("WT_", sample),
+      genotype == "EOfAD-like" ~ paste0("fAD_", sample),
+      genotype == "MPS-IIIB" ~ paste0("MPS_", sample),
+    ),
+    genotype = factor(genotype, levels = c("WT", "EOfAD-like", "MPS-IIIB")),
+    group = genotype
+  ) %>%
+  dplyr::arrange(genotype) %>%
+  dplyr::select(sample, genotype, alias, everything())
+```
+
+## DE data
+
+- Load `DGEList` and `topTable`s
+
+```{r dgeList_A}
+dgeList_A <- readRDS(here("data/de/dgeList_psen1_naglu.Rds"))
+```
+
+- Model fitting was performed with `glmFit()` and likelihood ratio testing with `glmLRT()`
+- `CQN` **was not** applied to this dataset
+
+```{r tt_A}
+tt_A <- readRDS(here("data/de/tt_psen1_naglu.Rds"))
+```
+
+## DAR
+
+```{r groups_A}
+groups_A <- list(
+  eofad = meta_A$sample[meta_A$genotype == "EOfAD-like"],
+  mps = meta_A$sample[meta_A$genotype == "MPS-IIIB"],
+  wt = meta_A$sample[meta_A$genotype == "WT"]
+)
+```
+
+```{r contrasts_A}
+contrasts_A <- makeContrasts(
+  eofad = eofad - wt,
+  mps = mps - wt,
+  levels = names(groups_A)
+)
+```
+
+Calculate props initially to save time processing `dar()` output with both fixed and sliding windows
+
+```{r props_A}
+props_A <- readGenotypes(here("data/vcf/psen1_naglu.vcf.gz")) %>%
+  countAlleles(groups = groups_A) %>%
+  filterLoci() %>%
+  countsToProps()
+```
+
+Modify the variables below to control region size of the fixed/elastic sliding window
+
+```{r regions_A}
+region_fixed_A <- 10000
+region_loci_A <- 11
+```
+
+Calculate DAR using a fixed window (base pairs)
+
+```{r dar_fixed_A}
+dar_fixed_A <- dar(
+  props_A,
+  contrasts = contrasts_A,
+  region_fixed = region_fixed_A
+)
+```
+
+Calculate DAR using an elastic window (number of loci)
+
+```{r dar_loci_A}
+dar_loci_A <- dar(
+  props_A,
+  contrasts = contrasts_A,
+  region_loci = region_loci_A
+)
+```
+
+Now assign the DAR values to genes
+
+```{r genes_A}
+genes_A <- dgeList_A$genes %>%
+  dplyr::mutate(
+    range = paste0(chromosome, ":", start, "-", end, ":", strand)
+  ) %>%
+  dplyr::select(-chromosome, -start, -end, -width, -strand) %>%
+  colToRanges("range")
+```
+
+Note that in the following chunks we are assigning genes a DAR value using the smoothed "region" DAR value of any regions that overlap the gene.
+Alternatively, we can assign genes a DAR value using the exact "origin" DAR value, such that a gene only receive a DAR value if an origin exists exclusively within a gene's range.
+Set the `dar_val` arg to `"origin"` to do so.
+
+```{r}
+gene_dar_fixed_A <- flipRanges(dar = dar_fixed_A) %>%
+  assignFeatureDar(features = genes_A, dar_val = "region")
+```
+
+For the elastic sliding window, I am extending the DAR regions to the edges of each chromosome such that no genes are missed with the `extend_edges` arg.
+
+```{r}
+gene_dar_loci_A <- flipRanges(dar_loci_A, extend_edges = TRUE) %>%
+  assignFeatureDar(features = genes_A, dar_val = "region")
+```
+
+### Export
+
+Export the data as it can take a while to run
+
+```{r dar_objs_A}
+## Provide object names for export as character vector
+export_objs <- c(
+  "props_A", "dar_fixed_A", "dar_loci_A", "gene_dar_fixed_A", "gene_dar_loci_A"
+)
+export_dir <- here("data/dar")
+```
+
+```{r export_A}
+if (!dir.exists(export_dir)) {
+  dir.create(export_dir, recursive = TRUE)
+}
+for (x in export_objs) {
+  path <- file.path(export_dir, paste0(x, ".Rds"))
+  saveRDS(get(x), path)
+}
+```
+
+# Dataset B (zebrafish)
+
+- [GEO](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE151999)
+- [Github repository](https://github.com/baerlachlan/210216_sorl1_snv)
+
+## Sample structure
+
+- V1482Afs/+ ($n = 6$, *sorl1* gene, Alzheimer's disease model)
+- R122Pfs/+ ($n = 4$, *sorl1* gene, Alzheimer's disease model)
+- V1482Afs/R122Pfs ($n = 6$, *sorl1* gene, transheterozygotes)
+- WT ($n = 8$)
+
+## Metadata
+
+```{r meta_B}
+meta_B <- read_csv(here("data/metadata/sorl1.csv")) %>%
+  as.data.frame() %>%
+  dplyr::arrange(Run) %>%
+  mutate(
+    genotype = case_when(
+      Genotype == "wild-type" ~ "WT",
+      Genotype == "sorl1V1482Afs/+" ~ "V1482Afs_het",
+      Genotype == "sorl1R122Pfs/+" ~ "R122Pfs_het",
+      Genotype == "sorl1V1482Afs/R122Pfs" ~ "Trans",
+    ),
+    genotype = factor(
+      genotype,
+      levels = c("WT", "V1482Afs_het", "R122Pfs_het", "Trans")
+    ),
+    alias = c(
+      paste0(rep("WT", 8), seq(1, 8)),
+      paste0(rep("V1482Afs", 6), seq(1, 6)),
+      paste0(rep("R122Pfs", 4), seq(1, 4)),
+      paste0(rep("Trans", 6), seq(1, 6))
+    )
+  ) %>%
+  dplyr::select(
+    sample = Run, genotype, genotype2 = Genotype, alias, gender, tank = Tank
+  )
+```
+
+## DE data
+
+- Load `DGEList` and `topTable`s
+
+```{r dgeList_B}
+dgeList_B <- readRDS(here("data/de/dgeList_sorl1.Rds"))
+```
+
+- Model fitting was performed with `glmFit()` and likelihood ratio testing with `glmLRT()`
+- `CQN` **was not** applied to this dataset
+
+```{r tt_B}
+tt_B <- readRDS(here("data/de/tt_sorl1.Rds"))
+```
+
+## DAR
+
+```{r groups_B}
+groups_B <- list(
+  V1482Afs = meta_B$sample[meta_B$genotype == "V1482Afs_het"],
+  R122Pfs = meta_B$sample[meta_B$genotype == "R122Pfs_het"],
+  trans = meta_B$sample[meta_B$genotype == "Trans"],
+  wt = meta_B$sample[meta_B$genotype == "WT"]
+)
+```
+
+```{r contrasts_B}
+contrasts_B <- makeContrasts(
+  V1482Afs = V1482Afs - wt,
+  R122Pfs = R122Pfs - wt,
+  trans = trans - wt,
+  levels = names(groups_B)
+)
+```
+
+Calculate props initially to save time processing `dar()` output with both fixed and sliding windows
+
+```{r props_B}
+props_B <- readGenotypes(here("data/vcf/sorl1.vcf.gz")) %>%
+  countAlleles(groups = groups_B) %>%
+  filterLoci() %>%
+  countsToProps()
+```
+
+Modify the variables below to control region size of the fixed/elastic sliding window
+
+```{r regions_B}
+region_fixed_B <- 10000
+region_loci_B <- 11
+```
+
+Calculate DAR using a fixed window (base pairs)
+
+```{r dar_fixed_B}
+dar_fixed_B <- dar(
+  props_B,
+  contrasts = contrasts_B,
+  region_fixed = region_fixed_B
+)
+```
+
+Calculate DAR using an elastic window (number of loci)
+
+```{r dar_loci_B}
+dar_loci_B <- dar(
+  props_B,
+  contrasts = contrasts_B,
+  region_loci = region_loci_B
+)
+```
+
+Now assign the DAR values to genes
+
+```{r genes_B}
+genes_B <- dgeList_B$genes %>%
+  dplyr::mutate(
+    range = paste0(chromosome, ":", start, "-", end, ":", strand)
+  ) %>%
+  dplyr::select(-chromosome, -start, -end, -width, -strand) %>%
+  colToRanges("range")
+```
+
+Note that in the following chunks we are assigning genes a DAR value using the smoothed "region" DAR value of any regions that overlap the gene.
+Alternatively, we can assign genes a DAR value using the exact "origin" DAR value, such that a gene only receive a DAR value if an origin exists exclusively within a gene's range.
+Set the `dar_val` arg to `"origin"` to do so.
+
+```{r}
+gene_dar_fixed_B <- flipRanges(dar = dar_fixed_B) %>%
+  assignFeatureDar(features = genes_B, dar_val = "region")
+```
+
+For the elastic sliding window, I am extending the DAR regions to the edges of each chromosome such that no genes are missed with the `extend_edges` arg.
+
+```{r}
+gene_dar_loci_B <- flipRanges(dar_loci_B, extend_edges = TRUE) %>%
+  assignFeatureDar(features = genes_B, dar_val = "region")
+```
+
+### Export
+
+Export the data as it can take a while to run
+
+```{r dar_objs_B}
+## Provide object names for export as character vector
+export_objs <- c(
+  "props_B", "dar_fixed_B", "dar_loci_B", "gene_dar_fixed_B", "gene_dar_loci_B"
+)
+export_dir <- here("data/dar")
+```
+
+```{r export_B}
+if (!dir.exists(export_dir)) {
+  dir.create(export_dir, recursive = TRUE)
+}
+for (x in export_objs) {
+  path <- file.path(export_dir, paste0(x, ".Rds"))
+  saveRDS(get(x), path)
+}
+```
+
+# Dataset C (zebrafish)
+
+- [GEO](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE164466)
+- [Github repository](https://github.com/baerlachlan/210408_psen1_fADfAI)
+
+## Sample structure
+
+- T428del/+ ($n = 7$, *psen1* gene, Alzheimer's disease model)
+- W233fs/+ ($n = 8$, *psen1* gene, Acne Inversa disease model)
+- WT ($n = 9$)
+
+## Metadata
+
+```{r meta_C}
+meta_C <- read_csv(here("data/metadata/psen1.csv")) %>%
+  dplyr::select(-sample) %>%
+  dplyr::rename(sample = basename, genotype = Genotype) %>%
+  ## We need some sample aliases that follow R naming conventions
+  mutate(
+    alias = c(
+      paste0(rep("fAD", 7), seq(1, 7)),
+      paste0(rep("fAI", 8), seq(1, 8)),
+      paste0(rep("wt", 9), seq(1, 9))
+    ),
+    genotype = factor(genotype, levels = c("WT", "EOfAD-like/+", "fAI-like/+")),
+    group = genotype
+  )
+```
+
+## DE data
+
+- Load `DGEList` and `topTable`s
+
+```{r dgeList_C}
+dgeList_C <- readRDS(here("data/de/dgeList_psen1.Rds"))
+```
+
+- Model fitting was performed with `glmFit()` and likelihood ratio testing with `glmLRT()`
+- `CQN` **was** applied to this dataset
+
+```{r tt_C}
+tt_C <- readRDS(here("data/de/tt_psen1.Rds"))
+```
+
+## DAR
+
+```{r groups_C}
+groups_C <- list(
+  eofad = meta_C$sample[meta_C$genotype == "EOfAD-like/+"],
+  fai = meta_C$sample[meta_C$genotype == "fAI-like/+"],
+  wt = meta_C$sample[meta_C$genotype == "WT"]
+)
+```
+
+```{r contrasts_C}
+contrasts_C <- makeContrasts(
+  eofad = eofad - wt,
+  fai = fai - wt,
+  levels = names(groups_C)
+)
+```
+
+Calculate props initially to save time processing `dar()` output with both fixed and sliding windows
+
+```{r props_C}
+props_C <- readGenotypes(here("data/vcf/psen1.vcf.gz")) %>%
+  countAlleles(groups = groups_C) %>%
+  filterLoci() %>%
+  countsToProps()
+```
+
+Modify the variables below to control region size of the fixed/elastic sliding window
+
+```{r regions_C}
+region_fixed_C <- 10000
+region_loci_C <- 11
+```
+
+Calculate DAR using a fixed window (base pairs)
+
+```{r dar_fixed_C}
+dar_fixed_C <- dar(
+  props_C,
+  contrasts = contrasts_C,
+  region_fixed = region_fixed_C
+)
+```
+
+Calculate DAR using an elastic window (number of loci)
+
+```{r dar_loci_C}
+dar_loci_C <- dar(
+  props_C,
+  contrasts = contrasts_C,
+  region_loci = region_loci_C
+)
+```
+
+Now assign the DAR values to genes
+
+```{r genes_C}
+genes_C <- dgeList_C$genes %>%
+  dplyr::mutate(
+    range = paste0(chromosome, ":", start, "-", end, ":", strand)
+  ) %>%
+  dplyr::select(-chromosome, -start, -end, -width, -strand) %>%
+  colToRanges("range")
+```
+
+Note that in the following chunks we are assigning genes a DAR value using the smoothed "region" DAR value of any regions that overlap the gene.
+Alternatively, we can assign genes a DAR value using the exact "origin" DAR value, such that a gene only receive a DAR value if an origin exists exclusively within a gene's range.
+Set the `dar_val` arg to `"origin"` to do so.
+
+```{r}
+gene_dar_fixed_C <- flipRanges(dar = dar_fixed_C) %>%
+  assignFeatureDar(features = genes_C, dar_val = "region")
+```
+
+For the elastic sliding window, I am extending the DAR regions to the edges of each chromosome such that no genes are missed with the `extend_edges` arg.
+
+```{r}
+gene_dar_loci_C <- flipRanges(dar_loci_C, extend_edges = TRUE) %>%
+  assignFeatureDar(features = genes_C, dar_val = "region")
+```
+
+### Export
+
+Export the data as it can take a while to run
+
+```{r dar_objs_C}
+## Provide object names for export as character vector
+export_objs <- c(
+  "props_C", "dar_fixed_C", "dar_loci_C", "gene_dar_fixed_C", "gene_dar_loci_C"
+)
+export_dir <- here("data/dar")
+```
+
+```{r export_C}
+if (!dir.exists(export_dir)) {
+  dir.create(export_dir, recursive = TRUE)
+}
+for (x in export_objs) {
+  path <- file.path(export_dir, paste0(x, ".Rds"))
+  saveRDS(get(x), path)
+}
+```
+
+# Dataset D (mouse)
+
+- [Synapse](https://www.synapse.org/#!Synapse:syn20808171)
+- [Github repository](https://github.com/baerlachlan/211001_APOE_Mm)
+
+## Sample structure
+
+- APOE2/APOE2 ($n = 8$ female, $n = 8$ male, targeted replacement of human *APOE* $\epsilon$2 allele, Alzheimer's disease protective)
+- APOE3/APOE3 ($n = 8$ female, $n = 8$ male, targeted replacement of human *APOE* $\epsilon$3 allele, Alzheimer's disease neutral)
+- APOE4/APOE4 ($n = 8$ female, $n = 8$ male, targeted replacement of human *APOE* $\epsilon$4 allele, Alzheimer's disease risk)
+
+## Metadata
+
+```{r meta_D}
+meta_D <- read_tsv(here("data/metadata/apoe_synapse.tsv")) %>%
+  left_join(read_csv(here("data/metadata/apoe.csv"))) %>%
+  dplyr::select(
+    sample = specimenID, species, genotypeBackground, litter, dateBirth,
+    dateDeath, genotype = Genotype, sex = Sex, age = Age, lane, basename = name,
+    modelSystemName, individualID, study
+  ) %>%
+  dplyr::filter(str_detect(sample, "_3M_")) %>%
+  mutate(basename = str_remove(basename, ".bam_R(1|2).fastq.gz")) %>%
+  distinct(sample, .keep_all = TRUE) %>%
+  mutate(
+    group = as.factor(paste0(genotype, "_", age, "_", sex)),
+    genotype = as.factor(genotype)
+  ) %>%
+  dplyr::arrange(genotype, group)
+```
+
+## DE data
+
+- Load `DGEList` and `topTable`s
+
+```{r dgeList_D}
+dgeList_D <- readRDS(here("data/de/dgeList_apoe.Rds"))
+```
+
+- Model fitting was performed with `glmFit()` and likelihood ratio testing with `glmLRT()`
+- `CQN` **was** applied to this dataset
+
+```{r tt_D}
+tt_D <- readRDS(here("data/de/tt_apoe.Rds"))
+```
+
+## DAR
+
+```{r groups_D}
+groups_D <- list(
+  apoe2_female = dplyr::filter(meta_D, genotype == "APOE2", sex == "female") %>%
+    pull(basename),
+  apoe2_male = dplyr::filter(meta_D, genotype == "APOE2", sex == "male") %>%
+    pull(basename),
+  apoe3_female = dplyr::filter(meta_D, genotype == "APOE3", sex == "female") %>%
+    pull(basename),
+  apoe3_male = dplyr::filter(meta_D, genotype == "APOE3", sex == "male") %>%
+    pull(basename),
+  apoe4_female = dplyr::filter(meta_D, genotype == "APOE4", sex == "female") %>%
+    pull(basename),
+  apoe4_male = dplyr::filter(meta_D, genotype == "APOE4", sex == "male") %>%
+    pull(basename)
+)
+```
+
+```{r contrasts_D}
+contrasts_D <- makeContrasts(
+  apoe2v3_female = apoe2_female - apoe3_female,
+  apoe2v3_male = apoe2_male - apoe3_male,
+  apoe4v3_female = apoe4_female - apoe3_female,
+  apoe4v3_male = apoe4_male - apoe3_male,
+  levels = names(groups_D)
+)
+```
+
+Calculate props initially to save time processing `dar()` output with both fixed and sliding windows
+
+```{r props_D}
+props_D <- readGenotypes(here("data/vcf/apoe.vcf.gz")) %>%
+  countAlleles(groups = groups_D) %>%
+  filterLoci() %>%
+  countsToProps()
+```
+
+Modify the variables below to control region size of the fixed/elastic sliding window
+
+```{r regions_D}
+region_fixed_D <- 10000
+region_loci_D <- 11
+```
+
+Calculate DAR using a fixed window (base pairs)
+
+```{r dar_fixed_D}
+dar_fixed_D <- dar(
+  props_D,
+  contrasts = contrasts_D,
+  region_fixed = region_fixed_D
+)
+```
+
+Calculate DAR using an elastic window (number of loci)
+
+```{r dar_loci_D}
+dar_loci_D <- dar(
+  props_D,
+  contrasts = contrasts_D,
+  region_loci = region_loci_D
+)
+```
+
+Now assign the DAR values to genes
+
+```{r genes_D}
+genes_D <- dgeList_D$genes %>%
+  dplyr::mutate(
+    range = paste0(chromosome, ":", start, "-", end, ":", strand)
+  ) %>%
+  dplyr::select(-chromosome, -start, -end, -width, -strand) %>%
+  colToRanges("range")
+```
+
+Note that in the following chunks we are assigning genes a DAR value using the smoothed "region" DAR value of any regions that overlap the gene.
+Alternatively, we can assign genes a DAR value using the exact "origin" DAR value, such that a gene only receive a DAR value if an origin exists exclusively within a gene's range.
+Set the `dar_val` arg to `"origin"` to do so.
+
+```{r}
+gene_dar_fixed_D <- flipRanges(dar = dar_fixed_D) %>%
+  assignFeatureDar(features = genes_D, dar_val = "region")
+```
+
+For the elastic sliding window, I am extending the DAR regions to the edges of each chromosome such that no genes are missed with the `extend_edges` arg.
+
+```{r}
+gene_dar_loci_D <- flipRanges(dar_loci_D, extend_edges = TRUE) %>%
+  assignFeatureDar(features = genes_D, dar_val = "region")
+```
+
+### Export
+
+Export the data as it can take a while to run
+
+```{r dar_objs_D}
+## Provide object names for export as character vector
+export_objs <- c(
+  "props_D", "dar_fixed_D", "dar_loci_D", "gene_dar_fixed_D", "gene_dar_loci_D"
+)
+export_dir <- here("data/dar")
+```
+
+```{r export_D}
+if (!dir.exists(export_dir)) {
+  dir.create(export_dir, recursive = TRUE)
+}
+for (x in export_objs) {
+  path <- file.path(export_dir, paste0(x, ".Rds"))
+  saveRDS(get(x), path)
+}
+```
