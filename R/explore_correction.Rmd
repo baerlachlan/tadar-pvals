@@ -40,33 +40,50 @@ library(pander)
 library(viridis)
 library(reactable)
 library(ggpubr)
-theme_set(theme_bw())
+library(ggtext)
+library(RColorBrewer)
+```
+
+```{r opts}
+theme_set(theme_pubclean())
+theme_update(
+  title = element_markdown(),
+  axis.title.x = element_markdown(),
+  axis.title.y = element_markdown(),
+  strip.background = element_blank(),
+  strip.text = element_textbox(
+    size = 10,
+    color = "black", fill = "white", box.color = "white",
+    halign = 0.5, linetype = 1, width = unit(1, "npc"),
+    padding = margin(3, 0, 1, 0), margin = margin(0, 0, 0, 0)
+  )
+)
 ```
 
 ```{r lb_reactable}
 lb_reactable <- function(
-        tbl, highlight = TRUE, striped = TRUE, compact = TRUE,
-        wrap = FALSE, resizable = TRUE, searchable = TRUE,
-        style = list(fontFamily = "Calibri, sans-serif"), ...
+    tbl, highlight = TRUE, striped = TRUE, compact = TRUE,
+    wrap = FALSE, resizable = TRUE, searchable = TRUE,
+    style = list(fontFamily = "Calibri, sans-serif"), ...
 ){
-    reactable(
-        tbl,
-        highlight = highlight, striped = striped, compact = compact,
-        wrap = wrap, resizable = TRUE, searchable = TRUE,
-        style = style, ...
-    )
+  reactable(
+    tbl,
+    highlight = highlight, striped = striped, compact = compact,
+    wrap = wrap, resizable = TRUE, searchable = TRUE,
+    style = style, ...
+  )
 }
 tooltip <- function(value, tooltip) {
-    tags$abbr(
-        style = "text-decoration: underline; text-decoration-style: solid; cursor: help",
-        title = tooltip,
-        value
-    )
+  tags$abbr(
+    style = "text-decoration: underline; text-decoration-style: solid; cursor: help",
+    title = tooltip,
+    value
+  )
 }
 react_format <- function(format, digits = 2){
-    function(val, ind, col_name){
-        formatC(val, digits = digits, format = format)
-    }
+  function(val, ind, col_name){
+    formatC(val, digits = digits, format = format)
+  }
 }
 ```
 
@@ -242,30 +259,30 @@ lapply(names(res_A), function(x){
     ) %>%
     ggplot(aes(PValue, after_stat(density))) +
     geom_histogram(fill = "grey70", colour = "black", binwidth = 0.01) +
-    geom_line(
-      ## Add 1 - dar^2 in red
-      aes(y = y, colour = f),
-      data = . %>%
-        pull(dar_q) %>%
-        levels() %>%
-        sapply(
-          \(x) {
-            min_dar = str_replace_all(x, "^[^0-9]([0-9\\.]+),.+", "\\1") %>% as.numeric()
-            tibble(
-              PValue = seq(0.01, 1, by = 0.01),
-              `1 - DAR` = dbeta(PValue, 1 - min_dar, 1),
-              `1 - DAR^2` = dbeta(PValue, 1 - min_dar^2, 1),
-              `sqrt(1 - DAR)` = dbeta(PValue, sqrt(1 - min_dar), 1),
-            )
-          },
-          simplify = FALSE
-        ) %>%
-        bind_rows(.id = "dar_q") %>%
-        pivot_longer(
-          cols = contains("- DAR"), names_to = "f", values_to = "y"
-        ) %>%
-        mutate(dar_q = fct_inorder(dar_q)),
-    ) +
+    # geom_line(
+    #   ## Add 1 - dar^2 in red
+    #   aes(y = y, colour = f),
+    #   data = . %>%
+    #     pull(dar_q) %>%
+    #     levels() %>%
+    #     sapply(
+    #       \(x) {
+    #         min_dar = str_replace_all(x, "^[^0-9]([0-9\\.]+),.+", "\\1") %>% as.numeric()
+    #         tibble(
+    #           PValue = seq(0.01, 1, by = 0.01),
+    #           `1 - DAR` = dbeta(PValue, 1 - min_dar, 1),
+    #           `1 - DAR^2` = dbeta(PValue, 1 - min_dar^2, 1),
+    #           `sqrt(1 - DAR)` = dbeta(PValue, sqrt(1 - min_dar), 1),
+    #         )
+    #       },
+    #       simplify = FALSE
+    #     ) %>%
+    #     bind_rows(.id = "dar_q") %>%
+    #     pivot_longer(
+    #       cols = contains("- DAR"), names_to = "f", values_to = "y"
+    #     ) %>%
+    #     mutate(dar_q = fct_inorder(dar_q)),
+    # ) +
     geom_label(
       aes(x = 1, y = 0, label = label),
       data = . %>%
@@ -276,6 +293,58 @@ lapply(names(res_A), function(x){
     facet_wrap(~dar_q, scales = "free_y") +
     labs(title = x)
 })
+```
+
+```{r include=FALSE, eval=FALSE}
+## Plot for manuscript
+res_A$mps %>%
+  mcols() %>%
+  as_tibble() %>%
+  dplyr::select(
+    starts_with("gene"), starts_with("log"), PValue, FDR
+  ) %>%
+  left_join(
+    mcols(gene_dar_A$mps) %>% as_tibble() %>% dplyr::select(gene_id, dar)
+  ) %>%
+  mutate(
+    dar_q = cut(
+      dar,
+      breaks = quantile(dar, probs = seq(0, 1, length.out = 21), na.rm = TRUE),
+      # breaks = seq(0, 1, length.out = 7),
+      include.lowest = TRUE
+    ) %>%
+      fct_na_value_to_level(levels(.)[[1]]),
+    dar_q = str_split(dar_q, ",") %>%
+      lapply(str_remove_all, pattern = "\\[|\\]|\\)|\\(") %>%
+      # vapply(paste0, FUN.VALUE = character(1), collapse = " - ") %>%
+      vapply(FUN.VALUE = character(1), \(x){
+        as.numeric(x) %>%
+          round(3) %>%
+          paste0(collapse = " - ")
+      }) %>%
+      as.factor()
+  ) %>%
+  ggplot(aes(PValue, after_stat(density))) +
+  # geom_bar(stat = "density") +
+  geom_histogram(fill = "grey70", colour = "black", binwidth = 0.05, linewidth = 0.5) +
+  geom_label(
+    aes(x = 1, y = 0, label = label),
+    data = . %>%
+      summarise(n = dplyr::n(), .by = dar_q) %>%
+      mutate(label = paste("n =", comma(n))),
+    hjust = 1, vjust = 0, alpha = 0.7, size = 3
+  ) +
+  scale_y_continuous(breaks = seq(0,3,0.5)) +
+  facet_wrap(~dar_q, scales = "free_y") +
+  labs(
+    x = "*p*-value",
+    y = "Density"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.y = element_blank()
+  )
+ggsave("~/phd/publications/tadar_manuscript/fig/p_dist_dar_q.png", width = 8, height = 6)
 ```
 
 ```{r}
@@ -348,6 +417,16 @@ lm(shape1 ~ dar, data = beta_fits_A$eofad) %>%
 lm_A_eofad <- function(dar){
   1.53110 - 2.82662 * dar
 }
+dar_tmp <- dar_A$eofad
+lm_all_nonorm <- tibble(
+  dataset = "A_eofad",
+  intercept = 1.53110,
+  slope = -2.82662,
+  dar_mean = mean(dar_tmp$dar_origin),
+  dar_median = median(dar_tmp$dar_origin),
+  dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+  dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+)
 ```
 
 ```{r, results='hide'}
@@ -534,9 +613,21 @@ lm(shape1 ~ dar, data = beta_fits_A$mps) %>%
 lm_A_mps <- function(dar){
   1.12769 - 1.80512 * dar
 }
+dar_tmp <- dar_A$mps
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "A_mps",
+    intercept = 1.12769,
+    slope = -1.80512,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
-```{r, results='hide'}
+```{r include=FALSE, eval=FALSE}
+## Plot for manuscript
 beta_fits_A$mps %>%
   mutate(
     `1 - DAR` = 1  - dar,
@@ -548,9 +639,14 @@ beta_fits_A$mps %>%
   mutate(estimate = ifelse(estimate > 1, 1, estimate)) %>%
   ggplot(aes(dar, shape1)) +
   geom_point(
-    data = . %>% distinct(dar, shape1)
+    data = . %>% distinct(dar, shape1),
+    size = 3, shape = 21, colour = "black", fill = "grey50"
   ) +
-  geom_line(aes(y = estimate, colour = f))
+  scale_y_continuous(breaks = seq(0, 1, 0.1)) +
+  # geom_line(aes(y = estimate, colour = f))
+  geom_smooth(method='lm', formula= y~x) +
+  labs(x = "DAR", y = "\u03B1")
+ggsave("~/phd/publications/tadar_manuscript/fig/alpha_dar.png", width = 8, height = 6)
 ```
 
 ```{r}
@@ -638,7 +734,7 @@ lm_all <- lm_all %>%
   ))
 ```
 
-```{r, results='hide'}
+``` {r, results='hide'}
 beta_fits_A$mps %>%
   mutate(
     `1 - DAR` = 1  - dar,
@@ -712,6 +808,46 @@ res_A$mps %>%
   stat_qq_line(distribution = qexp) +
   facet_wrap(~type) +
   scale_colour_brewer(palette= "Set1")
+```
+
+```{r include=FALSE, eval=FALSE}
+## Plot for manuscript
+theme_set(theme_pubclean())
+pal <- brewer.pal(3, "Set1")
+res_A$mps %>%
+  as_tibble() %>%
+  dplyr::select(
+    range, starts_with("gene"), starts_with("log"), PValue, FDR
+  ) %>%
+  left_join(
+    mcols(gene_dar_A$mps) %>% as_tibble() %>% dplyr::select(gene_id, dar)
+  ) %>%
+  mutate(
+    dar = ifelse(is.na(dar), 0, dar),
+    alpha = lm_A_mps_norm(dar),
+    alpha = ifelse(alpha > 1, 1, alpha),
+    alpha = ifelse(alpha < 0.1, 0.1, alpha),
+    darP = pbeta(PValue, alpha, 1),
+    Before = PValue,
+    After = darP
+  ) %>%
+  pivot_longer(
+    cols = all_of(c("Before", "After")), names_to = "type", values_to = "p"
+  ) %>%
+  mutate(type = fct_relevel(type, "Before")) %>%
+  ggplot(aes(sample = -log(p), colour = type)) +
+  stat_qq(distribution = qexp, size = 3, alpha = 0.7) +
+  stat_qq_line(distribution = qexp) +
+  scale_y_continuous(breaks = seq(0, 50, 5)) +
+  facet_wrap(~type) +
+  # scale_colour_manual(values = c("Before" = pal[1], "After" = pal[2])) +
+  scale_colour_manual(values = rep("grey20", 2)) +
+  labs(
+    x = "Theoretical quantiles",
+    y = "Observed quantiles"
+  ) +
+  theme(legend.position = "none")
+ggsave("~/phd/publications/tadar_manuscript/fig/qq_plot.png", width = 8, height = 6)
 ```
 
 # Dataset B (zebrafish)
@@ -948,6 +1084,17 @@ lm_B_V1482Afs <- function(dar){
   # 1.46331 - 1.41616 * dar
   1.52192 - 1.64891 * dar
 }
+dar_tmp <- dar_B$V1482Afs
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "B_V1482Afs",
+    intercept = 1.52192,
+    slope = -1.64891,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -1149,6 +1296,17 @@ lm(shape1 ~ dar, data = beta_fits_B$R122Pfs) %>%
 lm_B_R122Pfs <- function(dar){
   2.00307 - 2.41516 * dar
 }
+dar_tmp <- dar_B$R122Pfs
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "B_R122Pfs",
+    intercept = 2.00307,
+    slope = -2.41516,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -1350,6 +1508,17 @@ lm(shape1 ~ dar, data = beta_fits_B$trans) %>%
 lm_B_trans <- function(dar){
   1.58624 - 1.95257 * dar
 }
+dar_tmp <- dar_B$trans
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "B_trans",
+    intercept = 1.58624,
+    slope = -1.95257,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -1748,6 +1917,17 @@ lm(shape1 ~ dar + I(dar^2), data = beta_fits_C$eofad) %>%
 lm_C_eofad <- function(dar){
   1.03004 - 0.77544 * dar
 }
+dar_tmp <- dar_C$eofad
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "C_eofad",
+    intercept = 1.03004,
+    slope = -0.77544,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -1949,6 +2129,17 @@ lm(shape1 ~ dar, data = beta_fits_C$fai) %>%
 lm_C_fai <- function(dar){
   1.27179 - 1.70850 * dar
 }
+dar_tmp <- dar_C$fai
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "C_fai",
+    intercept = 1.27179,
+    slope = -1.70850,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -2350,6 +2541,17 @@ lm(shape1 ~ dar, data = beta_fits_D$apoe2v3_female) %>%
 lm_D_apoe2v3_female <- function(dar){
   0.52339 - 1.07314 * dar
 }
+dar_tmp <- dar_D$apoe2v3_female
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "D_apoe2v3_female",
+    intercept = 0.52339,
+    slope = -1.07314,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -2541,6 +2743,17 @@ lm(shape1 ~ dar, data = beta_fits_D$apoe2v3_male) %>%
 lm_D_apoe2v3_male <- function(dar){
   0.65566 - 1.46188 * dar
 }
+dar_tmp <- dar_D$apoe2v3_male
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "D_apoe2v3_male",
+    intercept = 0.65566,
+    slope = -1.46188,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -2732,6 +2945,17 @@ lm(shape1 ~ dar, data = beta_fits_D$apoe4v3_female) %>%
 lm_D_apoe4v3_female <- function(dar){
   0.64361 - 0.59121 * dar
 }
+dar_tmp <- dar_D$apoe4v3_female
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "D_apoe4v3_female",
+    intercept = 0.64361,
+    slope = -0.59121,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -2923,6 +3147,17 @@ lm(shape1 ~ dar, data = beta_fits_D$apoe4v3_male) %>%
 lm_D_apoe4v3_male <- function(dar){
   0.339208 - 0.229183 * dar
 }
+dar_tmp <- dar_D$apoe4v3_male
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "D_apoe4v3_male",
+    intercept = 0.339208,
+    slope = -0.229183,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -3318,6 +3553,17 @@ lm(shape1 ~ dar, data = beta_fits_E$eofad_wt) %>%
 lm_E_eofad_wt <- function(dar){
   1.30552 - 1.85562 * dar
 }
+dar_tmp <- dar_E$eofad_wt
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "E_eofad_wt",
+    intercept = 1.30552,
+    slope = -1.85562,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -3509,6 +3755,17 @@ lm(shape1 ~ dar, data = beta_fits_E$fai_wt) %>%
 lm_E_fai_wt <- function(dar){
   1.29802 - 1.20650 * dar
 }
+dar_tmp <- dar_E$fai_wt
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "E_fai_wt",
+    intercept = 1.29802,
+    slope = -1.20650,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -3700,6 +3957,17 @@ lm(shape1 ~ dar, data = beta_fits_E$eofad_fai) %>%
 lm_E_eofad_fai <- function(dar){
   0.93925 - 1.08928 * dar
 }
+dar_tmp <- dar_E$eofad_fai
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "E_eofad_fai",
+    intercept = 0.93925,
+    slope = -1.08928,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -3891,6 +4159,17 @@ lm(shape1 ~ dar, data = beta_fits_E$pk_tu) %>%
 lm_E_pk_tu <- function(dar){
   1.57741 - 2.70633 * dar
 }
+dar_tmp <- dar_E$pk_tu
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "E_pk_tu",
+    intercept = 1.57741,
+    slope = -2.70633,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -4082,6 +4361,17 @@ lm(shape1 ~ dar, data = beta_fits_E$pk_het) %>%
 lm_E_pk_het <- function(dar){
   1.25151 - 1.88631 * dar
 }
+dar_tmp <- dar_E$pk_het
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "E_pk_het",
+    intercept = 1.25151,
+    slope = -1.88631,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -4273,6 +4563,17 @@ lm(shape1 ~ dar, data = beta_fits_E$tu_het) %>%
 lm_E_tu_het <- function(dar){
   1.55663 - 2.50894 * dar
 }
+dar_tmp <- dar_E$tu_het
+lm_all_nonorm <- lm_all_nonorm %>%
+  rbind(tibble(
+    dataset = "E_tu_het",
+    intercept = 1.55663,
+    slope = -2.50894,
+    dar_mean = mean(dar_tmp$dar_origin),
+    dar_median = median(dar_tmp$dar_origin),
+    dar_mean_0 = mean(dar_tmp$dar_origin[dar_tmp$dar_origin != 0]),
+    dar_median_0 = median(dar_tmp$dar_origin[dar_tmp$dar_origin != 0])
+  ))
 ```
 
 ```{r, results='hide'}
@@ -4450,11 +4751,11 @@ lm_all %>%
   lb_reactable(
     pagination = FALSE,
     columns = list(
-                dar_mean = colDef(cell = react_format("f")),
-                dar_median = colDef(cell = react_format("f")),
-                dar_mean_0 = colDef(cell = react_format("f")),
-                dar_median_0 = colDef(cell = react_format("f"))
-            )
+      dar_mean = colDef(cell = react_format("f")),
+      dar_median = colDef(cell = react_format("f")),
+      dar_mean_0 = colDef(cell = react_format("f")),
+      dar_median_0 = colDef(cell = react_format("f"))
+    )
   )
 ```
 
@@ -4466,7 +4767,51 @@ lm_all %>%
   scale_y_continuous(limits = c(0, 1.3)) +
   geom_vline(xintercept = 0, linetype = "dashed") +
   geom_hline(yintercept = 0, linetype = "dashed") +
-  scale_colour_viridis()
+  scale_colour_viridis() +
+  labs(
+    x = "DAR",
+    y = "\u03B1"
+  )
+# ggsave("~/phd/publications/tadar_manuscript/fig/alpha_dar_post.png", width = 8, height = 6)
+```
+
+```{r}
+lm_all_nonorm %>%
+  ggplot() +
+  geom_abline(aes(intercept = intercept, slope = slope)) +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1.3)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_colour_viridis() +
+  labs(
+    x = "DAR",
+    y = "\u03B1"
+  )
+# ggsave("~/phd/publications/tadar_manuscript/fig/alpha_dar_prior.png", width = 8, height = 6)
+```
+
+```{r}
+theme_set(theme_pubclean())
+lm_all_nonorm %>%
+  dplyr::select(dataset, intercept_Before = intercept, slope_Before = slope) %>%
+  left_join(lm_all) %>%
+  dplyr::select(dataset, intercept_Before, slope_Before, intercept_After = intercept, slope_After = slope) %>%
+  pivot_longer(-dataset, names_to = c(".value", "Var"), names_sep = "_") %>%
+  mutate(Var = fct_relevel(Var, "Before")) %>%
+  ggplot() +
+  geom_abline(aes(intercept = intercept, slope = slope)) +
+  scale_x_continuous(limits = c(0, 1)) +
+  scale_y_continuous(limits = c(0, 1.3)) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  scale_colour_viridis() +
+  facet_wrap(~Var) +
+  labs(
+    x = "DAR",
+    y = "\u03B1"
+  )
+ggsave("~/phd/publications/tadar_manuscript/fig/alpha_dar.png", width = 8, height = 6)
 ```
 
 # Things to ask Stevie
